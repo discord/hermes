@@ -34,7 +34,7 @@ using NativeFrameTest = RuntimeTestFixture;
 TEST_F(NativeFrameTest, OverflowTest) {
   unsigned maxDepth = makeFramesUntilOverflow(runtime, nullptr);
   (void)maxDepth;
-#ifndef HERMES_CHECK_NATIVE_STACK
+#if !HERMES_CHECK_NATIVE_STACK
   // Save into a local variable in order to avoid linker errors when passed
   // to gtest.
   auto expectedMaxDepth = Runtime::MAX_NATIVE_CALL_FRAME_DEPTH;

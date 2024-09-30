@@ -82,7 +82,7 @@ namespace {
 static constexpr uint32_t kMaxSupportedNumRegisters =
     UINT32_MAX / sizeof(PinnedHermesValue);
 
-#ifdef HERMES_CHECK_NATIVE_STACK
+#if HERMES_CHECK_NATIVE_STACK
 /// The minimum stack gap allowed from RuntimeConfig.
 static constexpr uint32_t kMinSupportedNativeStackGap =
 #if LLVM_ADDRESS_SANITIZER_BUILD
@@ -264,7 +264,7 @@ Runtime::Runtime(
       jsLibStorage_(createJSLibStorage()),
       stackPointer_(),
       crashMgr_(runtimeConfig.getCrashMgr()),
-#ifdef HERMES_CHECK_NATIVE_STACK
+#if HERMES_CHECK_NATIVE_STACK
       nativeStackGap_(std::max(
           runtimeConfig.getNativeStackGap(),
           kMinSupportedNativeStackGap)),
@@ -1963,7 +1963,7 @@ static std::string &llvmStreamableToString(const T &v) {
 }
 
 bool Runtime::isNativeStackOverflowingSlowPath() {
-#ifdef HERMES_CHECK_NATIVE_STACK
+#if HERMES_CHECK_NATIVE_STACK
   auto [highPtr, size] = oscompat::thread_stack_bounds(nativeStackGap_);
   nativeStackHigh_ = (const char *)highPtr;
   nativeStackSize_ = size;
@@ -2278,7 +2278,7 @@ void Runtime::pushCallStackImpl(
 #endif // HERMES_MEMORY_INSTRUMENTATION
 
 void ScopedNativeDepthReducer::staticAsserts() {
-#ifdef HERMES_CHECK_NATIVE_STACK
+#if HERMES_CHECK_NATIVE_STACK
   static_assert(
       kReducedNativeStackGap < kMinSupportedNativeStackGap,
       "kMinSupportedNativeStackGap too low, must be reduced in the reducer");

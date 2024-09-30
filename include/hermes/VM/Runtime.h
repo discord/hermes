@@ -553,7 +553,7 @@ class HERMES_EMPTY_BASES Runtime : public PointerBase,
   ///   has been compiled without \c HERMES_CHECK_NATIVE_STACK.
   inline bool isNativeStackOverflowing();
 
-#ifdef HERMES_CHECK_NATIVE_STACK
+#if HERMES_CHECK_NATIVE_STACK
   /// Clear the native stack bounds and force recomputation.
   inline void clearStackBounds();
 #endif
@@ -1263,7 +1263,7 @@ class HERMES_EMPTY_BASES Runtime : public PointerBase,
   /// including \c stackPointer_.
   StackFramePtr currentFrame_{nullptr};
 
-#ifdef HERMES_CHECK_NATIVE_STACK
+#if HERMES_CHECK_NATIVE_STACK
   /// Native stack remaining before assuming overflow.
   unsigned nativeStackGap_;
 
@@ -1612,13 +1612,13 @@ class ScopedNativeDepthTracker {
  public:
   explicit ScopedNativeDepthTracker(Runtime &runtime) : runtime_(runtime) {
     (void)runtime_;
-#ifndef HERMES_CHECK_NATIVE_STACK
+#if !HERMES_CHECK_NATIVE_STACK
     ++runtime.nativeCallFrameDepth_;
 #endif
     overflowed_ = runtime.isNativeStackOverflowing();
   }
   ~ScopedNativeDepthTracker() {
-#ifndef HERMES_CHECK_NATIVE_STACK
+#if !HERMES_CHECK_NATIVE_STACK
     --runtime_.nativeCallFrameDepth_;
 #endif
   }
@@ -1635,7 +1635,7 @@ class ScopedNativeDepthTracker {
 /// cascade of exceptions could occur, overflowing the C++ stack.
 class ScopedNativeDepthReducer {
   Runtime &runtime_;
-#ifdef HERMES_CHECK_NATIVE_STACK
+#if HERMES_CHECK_NATIVE_STACK
   unsigned nativeStackGapOld;
   // This is empirically good enough.
   static constexpr int kReducedNativeStackGap =
@@ -1651,7 +1651,7 @@ class ScopedNativeDepthReducer {
 #endif
 
  public:
-#ifdef HERMES_CHECK_NATIVE_STACK
+#if HERMES_CHECK_NATIVE_STACK
   explicit ScopedNativeDepthReducer(Runtime &runtime)
       : runtime_(runtime), nativeStackGapOld(runtime.nativeStackGap_) {
     // Temporarily reduce the gap to use that headroom for gathering the error.
@@ -1742,7 +1742,7 @@ class ScopedNativeCallFrame {
       HermesValue newTarget,
       HermesValue thisArg)
       : runtime_(runtime), savedSP_(runtime.getStackPointer()) {
-#ifndef HERMES_CHECK_NATIVE_STACK
+#if !HERMES_CHECK_NATIVE_STACK
     runtime.nativeCallFrameDepth_++;
 #endif
     uint32_t registersNeeded =
@@ -1798,7 +1798,7 @@ class ScopedNativeCallFrame {
   ~ScopedNativeCallFrame() {
     // Note that we unconditionally increment the native call frame depth and
     // save the SP to avoid branching in the dtor.
-#ifndef HERMES_CHECK_NATIVE_STACK
+#if !HERMES_CHECK_NATIVE_STACK
     runtime_.nativeCallFrameDepth_--;
 #endif
     runtime_.popToSavedStackPointer(savedSP_);
@@ -2131,7 +2131,7 @@ inline llvh::iterator_range<ConstStackFrameIterator> Runtime::getStackFrames()
 };
 
 inline bool Runtime::isNativeStackOverflowing() {
-#ifdef HERMES_CHECK_NATIVE_STACK
+#if HERMES_CHECK_NATIVE_STACK
   // Check for overflow by subtracting the sp from the high pointer.
   // If the sp is outside the valid stack range, the difference will
   // be greater than the known stack size.
@@ -2159,7 +2159,7 @@ inline bool Runtime::isNativeStackOverflowing() {
 #endif
 }
 
-#ifdef HERMES_CHECK_NATIVE_STACK
+#if HERMES_CHECK_NATIVE_STACK
 inline void Runtime::clearStackBounds() {
   nativeStackHigh_ = nullptr;
   nativeStackSize_ = 0;
