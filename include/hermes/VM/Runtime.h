@@ -1623,15 +1623,11 @@ class ScopedNativeDepthTracker {
  public:
   explicit ScopedNativeDepthTracker(Runtime &runtime) : runtime_(runtime) {
     (void)runtime_;
-#ifndef HERMES_CHECK_NATIVE_STACK
     ++runtime.overflowGuard_.callDepth;
-#endif
     overflowed_ = runtime.isStackOverflowing();
   }
   ~ScopedNativeDepthTracker() {
-#ifndef HERMES_CHECK_NATIVE_STACK
     --runtime_.overflowGuard_.callDepth;
-#endif
   }
 
   /// \return whether we overflowed the native call frame depth.
@@ -1646,41 +1642,11 @@ class ScopedNativeDepthTracker {
 /// cascade of exceptions could occur, overflowing the C++ stack.
 class ScopedNativeDepthReducer {
   Runtime &runtime_;
-#ifdef HERMES_CHECK_NATIVE_STACK
-  unsigned nativeStackGapOld;
-  // This is empirically good enough.
-  static constexpr int kReducedNativeStackGap =
-#if LLVM_ADDRESS_SANITIZER_BUILD
-      256 * 1024;
-#else
-      32 * 1024;
-#endif
-#else
   bool undo = false;
   // This is empirically good enough.
   static constexpr int kDepthAdjustment = 3;
-#endif
 
  public:
-#ifdef HERMES_CHECK_NATIVE_STACK
-  explicit ScopedNativeDepthReducer(Runtime &runtime)
-      : runtime_(runtime),
-        nativeStackGapOld(runtime.overflowGuard_.nativeStackGap) {
-    // Temporarily reduce the gap to use that headroom for gathering the error.
-    // If overflow is detected, the recomputation of the stack bounds will
-    // result in no gap for the duration of the ScopedNativeDepthReducer's
-    // lifetime.
-    runtime_.overflowGuard_.nativeStackGap = kReducedNativeStackGap;
-  }
-  ~ScopedNativeDepthReducer() {
-    assert(
-        runtime_.overflowGuard_.nativeStackGap == kReducedNativeStackGap &&
-        "ScopedNativeDepthReducer gap was overridden");
-    runtime_.overflowGuard_.nativeStackGap = nativeStackGapOld;
-    // Force the bounds to be recomputed the next time.
-    runtime_.overflowGuard_.clearStackBounds();
-  }
-#else
   explicit ScopedNativeDepthReducer(Runtime &runtime) : runtime_(runtime) {
     if (runtime.overflowGuard_.callDepth >= kDepthAdjustment) {
       runtime.overflowGuard_.callDepth -= kDepthAdjustment;
@@ -1692,7 +1658,6 @@ class ScopedNativeDepthReducer {
       runtime_.overflowGuard_.callDepth += kDepthAdjustment;
     }
   }
-#endif
 
  private:
   /// Unused function for static asserts that use internal information.
@@ -1754,9 +1719,7 @@ class ScopedNativeCallFrame {
       HermesValue newTarget,
       HermesValue thisArg)
       : runtime_(runtime), savedSP_(runtime.getStackPointer()) {
-#ifndef HERMES_CHECK_NATIVE_STACK
     runtime.overflowGuard_.callDepth++;
-#endif
     uint32_t registersNeeded =
         StackFrameLayout::callerOutgoingRegisters(argCount);
     overflowed_ = !runtimeCanAllocateFrame(runtime, registersNeeded);
@@ -1811,9 +1774,7 @@ class ScopedNativeCallFrame {
   ~ScopedNativeCallFrame() {
     // Note that we unconditionally increment the native call frame depth and
     // save the SP to avoid branching in the dtor.
-#ifndef HERMES_CHECK_NATIVE_STACK
     runtime_.overflowGuard_.callDepth--;
-#endif
     runtime_.popToSavedStackPointer(savedSP_);
 #ifndef NDEBUG
     // Clear the frame to detect use-after-free.
@@ -2173,7 +2134,6 @@ inline llvh::iterator_range<ConstStackFrameIterator> Runtime::getStackFrames()
 
 inline StackOverflowGuard Runtime::getOverflowGuardForRegex() {
   StackOverflowGuard copy = overflowGuard_;
-#ifndef HERMES_CHECK_NATIVE_STACK
   // We should take into account the approximate difference in sizes between the
   // stack size of the interpreter vs the regex executor. The max call depth in
   // use here was calculated using call stack sizes of the interpreter. Since
@@ -2182,7 +2142,6 @@ inline StackOverflowGuard Runtime::getOverflowGuardForRegex() {
   // some number larger than 1.
   constexpr uint32_t kRegexMaxDepthMult = 5;
   copy.maxCallDepth *= kRegexMaxDepthMult;
-#endif
   return copy;
 }
 

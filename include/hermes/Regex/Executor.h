@@ -69,13 +69,7 @@ MatchRuntimeResult searchWithBytecode(
     std::vector<CapturedRange> *captures,
     constants::MatchFlagType matchFlags,
     StackOverflowGuard guard =
-#ifdef HERMES_CHECK_NATIVE_STACK
-        StackOverflowGuard::nativeStackGuard(
-            512 * 1024) // this is a conservative gap that should work in
-                        // sanitizer builds
-#else
         StackOverflowGuard::depthCounterGuard(128)
-#endif
 );
 
 /// This is the ASCII overload.
@@ -87,13 +81,7 @@ MatchRuntimeResult searchWithBytecode(
     std::vector<CapturedRange> *captures,
     constants::MatchFlagType matchFlags,
     StackOverflowGuard guard =
-#ifdef HERMES_CHECK_NATIVE_STACK
-        StackOverflowGuard::nativeStackGuard(
-            512 * 1024) // this is a conservative gap that should work in
-                        // sanitizer builds
-#else
         StackOverflowGuard::depthCounterGuard(128)
-#endif
 );
 
 } // namespace regex
