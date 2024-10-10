@@ -7,11 +7,10 @@ add_hermes_library(hermesBCP47Parser BCP47Parser.cpp)
 
 if(HERMES_ENABLE_INTL)
   if(HERMES_IS_ANDROID)
-    add_subdirectory(${CMAKE_SOURCE_DIR}/external/icu_decls icu4c)
     add_hermes_library(hermesPlatformIntl PlatformIntlAndroid.cpp
-        LINK_LIBS 
+        LINK_LIBS
         fbjni::fbjni
-        LINK_OBJLIBS 
+        LINK_OBJLIBS
         hermesBCP47Parser
         hermesPublic
         icu4c
