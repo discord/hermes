@@ -998,11 +998,9 @@ auto Context<Traits>::match(State<Traits> *s, bool onlyAtStart)
       (c.forwards() || locsToCheckCount == 1) &&
       "Can only check one location when cursor is backwards");
 
-#ifndef HERMES_CHECK_NATIVE_STACK
   ++overflowGuard_.callDepth;
   auto decrement =
       llvh::make_scope_exit([this] { --overflowGuard_.callDepth; });
-#endif
 
   // Make sure we are not exceeding the set limit of the amount of times we can
   // recurse.

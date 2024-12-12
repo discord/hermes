@@ -83,16 +83,6 @@ namespace {
 static constexpr uint32_t kMaxSupportedNumRegisters =
     UINT32_MAX / sizeof(PinnedHermesValue);
 
-#ifdef HERMES_CHECK_NATIVE_STACK
-/// The minimum stack gap allowed from RuntimeConfig.
-static constexpr uint32_t kMinSupportedNativeStackGap =
-#if LLVM_ADDRESS_SANITIZER_BUILD
-    512 * 1024;
-#else
-    64 * 1024;
-#endif
-#endif
-
 // Only track I/O for buffers > 64 kB (which excludes things like
 // Runtime::generateSpecialRuntimeBytecode).
 static constexpr size_t MIN_IO_TRACKING_SIZE = 64 * 1024;
@@ -265,14 +255,8 @@ Runtime::Runtime(
       jsLibStorage_(createJSLibStorage()),
       stackPointer_(),
       crashMgr_(runtimeConfig.getCrashMgr()),
-#ifdef HERMES_CHECK_NATIVE_STACK
-      overflowGuard_(StackOverflowGuard::nativeStackGuard(std::max(
-          runtimeConfig.getNativeStackGap(),
-          kMinSupportedNativeStackGap))),
-#else
       overflowGuard_(StackOverflowGuard::depthCounterGuard(
           Runtime::MAX_NATIVE_CALL_FRAME_DEPTH)),
-#endif
       crashCallbackKey_(
           crashMgr_->registerCallback([this](int fd) { crashCallback(fd); })),
       codeCoverageProfiler_(std::make_unique<CodeCoverageProfiler>(*this)),
@@ -2295,11 +2279,6 @@ void Runtime::pushCallStackImpl(
 #endif // HERMES_MEMORY_INSTRUMENTATION
 
 void ScopedNativeDepthReducer::staticAsserts() {
-#ifdef HERMES_CHECK_NATIVE_STACK
-  static_assert(
-      kReducedNativeStackGap < kMinSupportedNativeStackGap,
-      "kMinSupportedNativeStackGap too low, must be reduced in the reducer");
-#endif
 }
 
 } // namespace vm
