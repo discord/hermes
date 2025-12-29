@@ -11,6 +11,8 @@ if (ANDROID)
   list(APPEND link_libs log)
 endif()
 
+include_directories(${PROJECT_SOURCE_DIR}/external/fast_float/)
+
 add_hermes_library(hermesSupport
         Allocator.cpp
         Base64.cpp
@@ -26,6 +28,7 @@ add_hermes_library(hermesSupport
         OSCompatPosix.cpp
         OSCompatWindows.cpp
         PageAccessTrackerPosix.cpp
+        FastStrToDouble.cpp
         PerfSection.cpp
         SemaphorePosix.cpp
         SerialExecutor.cpp

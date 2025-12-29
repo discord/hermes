@@ -20,6 +20,7 @@
 #include "hermes/VM/PrimitiveBox.h"
 
 #include "JSONLexer.h"
+#include <variant>
 
 #include "llvh/ADT/SmallString.h"
 #include "llvh/Support/SaveAndRestore.h"
@@ -29,12 +30,7 @@ namespace vm {
 
 namespace {
 
-/// This class wraps the functionality required to parse a JSON string into
-/// a VM runtime value. It expects a UTF8 string as input, and returns a
-/// HermesValue when parse is called.
-class RuntimeJSONParser {
- public:
-  static constexpr int32_t MAX_RECURSION_DEPTH =
+static constexpr int32_t MAX_JSON_RECURSION_DEPTH =
 #ifndef HERMES_LIMIT_STACK_DEPTH
       512
 #else
@@ -42,12 +38,22 @@ class RuntimeJSONParser {
 #endif
       ;
 
+/// This class wraps the functionality required to parse a JSON string into
+/// a VM runtime value. It supports ASCII/UTF16/UTF8 input, and returns a
+/// HermesValue when parse is called.
+template <EncodingKind Kind>
+class RuntimeJSONParser {
+ public:
+
+
  private:
+  using Traits = EncodingTraits<Kind>;
+  using CharT = typename Traits::CharT;
   /// The VM runtime.
   Runtime &runtime_;
 
   /// The lexer.
-  JSONLexer lexer_;
+  JSONLexer<Kind> lexer_;
 
   /// Stores the optional reviver parameter.
   /// https://es5.github.io/#x15.12.2
@@ -61,16 +67,21 @@ class RuntimeJSONParser {
   /// Decremented every time a nested level is started,
   /// and incremented again when leaving the nest.
   /// If it drops below 0 while parsing, raise a stack overflow.
-  int32_t remainingDepth_{MAX_RECURSION_DEPTH};
+  int32_t remainingDepth_{MAX_JSON_RECURSION_DEPTH};
 
  public:
+    template <typename U = Traits, typename = std::enable_if_t<U::UsesRawPtr>>
   explicit RuntimeJSONParser(
       Runtime &runtime,
-      UTF16Stream &&jsonString,
+      llvh::ArrayRef<CharT> str,
       Handle<Callable> reviver)
+      : runtime_(runtime), lexer_(runtime, str), reviver_(reviver), tmpHandle_(runtime) {}
+
+  template <typename U = Traits, typename = std::enable_if_t<!U::UsesRawPtr>>
+  explicit RuntimeJSONParser(Runtime &runtime, UTF16Stream &&jsonString)
       : runtime_(runtime),
         lexer_(runtime, std::move(jsonString)),
-        reviver_(reviver),
+        reviver_(Runtime::makeNullHandle<Callable>()),
         tmpHandle_(runtime) {}
 
   /// Parse JSON string through lexer_, create objects using runtime_.
@@ -162,7 +173,7 @@ class JSONStringifyer {
   /// The max amount that depthCount_ is allowed to reach. Once it's reached, an
   /// exception will be thrown.
   static constexpr uint32_t MAX_RECURSION_DEPTH{
-      RuntimeJSONParser::MAX_RECURSION_DEPTH};
+      MAX_JSON_RECURSION_DEPTH};
 
   /// The output buffer. The serialization process will append into it.
   llvh::SmallVector<char16_t, 32> output_{};
@@ -257,7 +268,8 @@ class JSONStringifyer {
 };
 } // namespace
 
-CallResult<HermesValue> RuntimeJSONParser::parse() {
+template <EncodingKind Kind>
+CallResult<HermesValue> RuntimeJSONParser<Kind>::parse() {
   // parseValue() requires one token to start with.
   if (LLVM_UNLIKELY(lexer_.advance() == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
@@ -280,7 +292,8 @@ CallResult<HermesValue> RuntimeJSONParser::parse() {
   return parRes;
 }
 
-CallResult<HermesValue> RuntimeJSONParser::parseValue() {
+template <EncodingKind Kind>
+CallResult<HermesValue> RuntimeJSONParser<Kind>::parseValue() {
   llvh::SaveAndRestore<decltype(remainingDepth_)> oldDepth{
       remainingDepth_, remainingDepth_ - 1};
   if (remainingDepth_ <= 0) {
@@ -333,7 +346,8 @@ CallResult<HermesValue> RuntimeJSONParser::parseValue() {
   return returnValue.getHermesValue();
 }
 
-CallResult<HermesValue> RuntimeJSONParser::parseArray() {
+template <EncodingKind Kind>
+CallResult<HermesValue> RuntimeJSONParser<Kind>::parseArray() {
   assert(
       lexer_.getCurToken()->getKind() == JSONTokenKind::LSquare &&
       "Wrong entrance to parseArray");
@@ -386,7 +400,8 @@ CallResult<HermesValue> RuntimeJSONParser::parseArray() {
   return array.getHermesValue();
 }
 
-CallResult<HermesValue> RuntimeJSONParser::parseObject() {
+template <EncodingKind Kind>
+CallResult<HermesValue> RuntimeJSONParser<Kind>::parseObject() {
   assert(
       lexer_.getCurToken()->getKind() == JSONTokenKind::LBrace &&
       "Wrong entrance to parseObject");
@@ -456,7 +471,8 @@ CallResult<HermesValue> RuntimeJSONParser::parseObject() {
   return object.getHermesValue();
 }
 
-CallResult<HermesValue> RuntimeJSONParser::revive(Handle<> value) {
+template <EncodingKind Kind>
+CallResult<HermesValue> RuntimeJSONParser<Kind>::revive(Handle<> value) {
   auto root = runtime_.makeHandle(JSObject::create(runtime_));
   auto status = JSObject::defineOwnProperty(
       root,
@@ -472,7 +488,8 @@ CallResult<HermesValue> RuntimeJSONParser::revive(Handle<> value) {
       root, runtime_.getPredefinedStringHandle(Predefined::emptyString));
 }
 
-CallResult<HermesValue> RuntimeJSONParser::operationWalk(
+template <EncodingKind Kind>
+CallResult<HermesValue> RuntimeJSONParser<Kind>::operationWalk(
     Handle<JSObject> holder,
     Handle<> property) {
   // The operation is recursive so it needs a GCScope.
@@ -542,7 +559,10 @@ CallResult<HermesValue> RuntimeJSONParser::operationWalk(
       .toCallResultHermesValue();
 }
 
-ExecutionStatus RuntimeJSONParser::filter(Handle<JSObject> val, Handle<> key) {
+template <EncodingKind Kind>
+ExecutionStatus RuntimeJSONParser<Kind>::filter(
+    Handle<JSObject> val,
+    Handle<> key) {
   auto jsonRes = operationWalk(val, key);
   if (LLVM_UNLIKELY(jsonRes == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
@@ -572,11 +592,25 @@ CallResult<HermesValue> runtimeJSONParse(
     Runtime &runtime,
     Handle<StringPrimitive> jsonString,
     Handle<Callable> reviver) {
-  // Our parser requires UTF16 data that does not move during GCs, so
-  // in most cases we'll need to copy, except for external 16-bit strings.
+    // Our parser requires strings that do not move during GCs, so
+  // in most cases we'll need to copy, except for external strings.
+  if (jsonString->isASCII()) {
+    ASCIIRef ref;
+    llvh::SmallVector<char, 32> storage;
+    if (LLVM_UNLIKELY(jsonString->isExternal())) {
+      ref = jsonString->getStringRef<char>();
+    } else {
+      auto view = StringPrimitive::createStringView(runtime, jsonString);
+      storage.append(
+          view.castToCharPtr(), view.castToCharPtr() + view.length());
+      ref = storage;
+    }
+    RuntimeJSONParser<EncodingKind::ASCII> parser{runtime, ref, reviver};
+    return parser.parse();
+  }
   UTF16Ref ref;
   SmallU16String<32> storage;
-  if (LLVM_UNLIKELY(jsonString->isExternal() && !jsonString->isASCII())) {
+  if (LLVM_UNLIKELY(jsonString->isExternal())) {
     ref = jsonString->getStringRef<char16_t>();
   } else {
     StringPrimitive::createStringView(runtime, jsonString)
@@ -584,15 +618,14 @@ CallResult<HermesValue> runtimeJSONParse(
     ref = storage;
   }
 
-  RuntimeJSONParser parser{runtime, UTF16Stream(ref), reviver};
+  RuntimeJSONParser<EncodingKind::UTF16> parser{runtime, ref, reviver};
   return parser.parse();
 }
 
 CallResult<HermesValue> runtimeJSONParseRef(
     Runtime &runtime,
     UTF16Stream &&stream) {
-  RuntimeJSONParser parser{
-      runtime, std::move(stream), Runtime::makeNullHandle<Callable>()};
+    RuntimeJSONParser<EncodingKind::UTF8> parser{runtime, std::move(stream)};
   return parser.parse();
 }
 
