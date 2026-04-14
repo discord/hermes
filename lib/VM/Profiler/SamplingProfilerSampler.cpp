@@ -181,6 +181,16 @@ bool Sampler::enable(double meanHzFreq) {
   if (enabled_) {
     return true;
   }
+
+  // Update all registered profilers to target the current thread.
+  // The Hermes runtime may have been created on a different thread (e.g. a
+  // background pool thread) from where JS actually executes. Since enable()
+  // is called from the JS thread, updating here ensures SIGPROF is delivered
+  // to the correct thread.
+  for (SamplingProfiler *profiler : profilers_) {
+    profiler->setRuntimeThread();
+  }
+
   if (!platformEnable()) {
     return false;
   }
