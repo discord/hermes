@@ -404,6 +404,19 @@ class HiddenClass final : public GCCell {
   /// false. If there was no allocated property map, this returns llvh::None. If
   /// this fails by returning None, the "slow path", \c findProperty() itself,
   /// must be used.
+  /// \return the existing child of \p self for adding property \p name with
+  /// \p flags, or nullptr. A non-null result implies \p self does not have
+  /// \p name. Does not allocate.
+  static HiddenClass *findExistingAddTransition(
+      HiddenClass *self,
+      Runtime &runtime,
+      SymbolID name,
+      PropertyFlags flags) {
+    if (self->isDictionary())
+      return nullptr;
+    return self->transitionMap_.lookup(runtime, {name, flags});
+  }
+
   static OptValue<bool> tryFindPropertyFast(
       const HiddenClass *self,
       PointerBase &base,
