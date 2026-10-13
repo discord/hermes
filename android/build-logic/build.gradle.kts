@@ -15,7 +15,7 @@ repositories {
 group = "com.facebook.hermes"
 
 kotlin {
-  @Suppress("MagicNumber") jvmToolchain(17)
+  @Suppress("MagicNumber") jvmToolchain(21)
   compilerOptions {
     allWarningsAsErrors = providers.gradleProperty("warningsAsErrors").orNull.toBoolean()
   }
