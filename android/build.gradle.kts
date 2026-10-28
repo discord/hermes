@@ -267,7 +267,7 @@ android {
     release {
       externalNativeBuild {
         cmake {
-          val releaseBuildType = project.findProperty("hermesReleaseCmakeBuildType")?.toString() ?: "MinSizeRel"
+          val releaseBuildType = project.findProperty("hermesReleaseCmakeBuildType")?.toString() ?: "Release"
           arguments("-DCMAKE_BUILD_TYPE=$releaseBuildType")
           project.findProperty("hermesHeapHvMode")?.toString()?.let { arguments("-DHERMESVM_HEAP_HV_MODE=$it") }
           project.findProperty("hermesExtraCmakeArgs")?.toString()?.split("|")?.filter { it.isNotBlank() }?.forEach { arguments(it) }
