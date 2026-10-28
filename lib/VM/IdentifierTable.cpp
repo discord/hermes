@@ -96,8 +96,10 @@ CallResult<Handle<SymbolID>> IdentifierTable::getSymbolHandleFromPrimitive(
     return runtime.makeHandle(id);
   }
   StrSymCacheEntry *cacheEntry = &strSymCache_[strSymCacheIndex(str.get())];
-  if (cacheEntry->str == str.get())
+  if (cacheEntry->str == str.get()) {
+    runtime.getHeap().weakRefReadBarrier(cacheEntry->sym);
     return runtime.makeHandle(cacheEntry->sym);
+  }
   auto origHandle = runtime.makeHandle(std::move(str));
   // Force the string primitive to flatten if it's a rope.
   auto handle = StringPrimitive::ensureFlat(runtime, origHandle);

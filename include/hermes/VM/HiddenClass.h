@@ -543,6 +543,9 @@ class HiddenClass final : public GCCell {
   /// (notably the global object, whose lazy globals are redefined at startup).
   /// Allow up to this many cacheable re-classings first.
   static constexpr unsigned kDictReclassLimit = 15;
+  static_assert(
+      kDictReclassLimit < (1u << 4),
+      "kDictReclassLimit must fit in ClassFlags::dictReclassCount");
 
   /// If \p self is a cacheable dictionary within kDictReclassLimit, return a
   /// new cacheable dictionary class; otherwise a null handle.

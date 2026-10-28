@@ -346,7 +346,6 @@ CallResult<HermesValue> RuntimeJSONParser::parseValue() {
 CallResult<HermesValue> RuntimeJSONParser::parseArray() {
   struct : public Locals {
     PinnedValue<JSArray> array;
-    PinnedValue<> indexValue;
     PinnedValue<> elementValue;
   } lv;
   LocalsRAII lraii(runtime_, &lv);
