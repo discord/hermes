@@ -364,6 +364,17 @@ if(HAVE_ICF)
   list(APPEND HERMES_EXTRA_LINKER_FLAGS "LINKER:--icf=safe")
 endif()
 
+set(HERMES_EXTRA_COMPILE_FLAGS "" CACHE STRING "Extra compile flags (space separated)")
+if(HERMES_EXTRA_COMPILE_FLAGS)
+  separate_arguments(_hermes_extra_compile_flags UNIX_COMMAND "${HERMES_EXTRA_COMPILE_FLAGS}")
+  add_compile_options(${_hermes_extra_compile_flags})
+endif()
+set(HERMES_EXTRA_LINK_FLAGS "" CACHE STRING "Extra linker flags for Hermes binaries/libraries (space separated)")
+if(HERMES_EXTRA_LINK_FLAGS)
+  separate_arguments(_hermes_extra_link_flags UNIX_COMMAND "${HERMES_EXTRA_LINK_FLAGS}")
+  list(APPEND HERMES_EXTRA_LINKER_FLAGS ${_hermes_extra_link_flags})
+endif()
+
 # Make the HERMES_RELEASE_VERSION accessible for version printing in C++.
 if(HERMES_RELEASE_VERSION)
     add_definitions(-DHERMES_RELEASE_VERSION="${HERMES_RELEASE_VERSION}")

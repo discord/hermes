@@ -33,6 +33,8 @@ ExecutionStatus JSONLexer::advanceStrAsSymbol() {
 }
 
 ExecutionStatus JSONLexer::advanceHelper(bool forKey) {
+  if (ascii_)
+    return advanceHelperAscii(forKey);
   // Skip whitespaces.
   while (curCharPtr_.hasChar() && isJSONWhiteSpace(*curCharPtr_)) {
     ++curCharPtr_;
@@ -260,6 +262,259 @@ ExecutionStatus JSONLexer::scanWord(const char *word, JSONTokenKind kind) {
   if (*word) {
     return error(u"Unexpected end of input");
   }
+  token_.setPunctuator(kind);
+  return ExecutionStatus::RETURNED;
+}
+
+// ---------------------------------------------------------------------------
+// ASCII mode. Same grammar and errors as the UTF-16 path above, but
+// scanning a stable 7-bit buffer directly: no widening copy of the input,
+// identifier lookups on 8-bit keys, and 8-bit string values created without
+// re-checking their encoding.
+
+ExecutionStatus JSONLexer::advanceHelperAscii(bool forKey) {
+  while (acur_ != aend_ &&
+         (*acur_ == ' ' || *acur_ == '\n' || *acur_ == '\r' || *acur_ == '\t'))
+    ++acur_;
+  if (acur_ == aend_) {
+    token_.setEof();
+    return ExecutionStatus::RETURNED;
+  }
+  token_.setFirstChar((unsigned char)*acur_);
+  switch (*acur_) {
+#define APUNC(ch, tok)         \
+  case ch:                     \
+    token_.setPunctuator(tok); \
+    ++acur_;                   \
+    return ExecutionStatus::RETURNED
+    APUNC('{', JSONTokenKind::LBrace);
+    APUNC('}', JSONTokenKind::RBrace);
+    APUNC('[', JSONTokenKind::LSquare);
+    APUNC(']', JSONTokenKind::RSquare);
+    APUNC(',', JSONTokenKind::Comma);
+    APUNC(':', JSONTokenKind::Colon);
+#undef APUNC
+    case 't':
+      return scanWordAscii(TrueString, JSONTokenKind::True);
+    case 'f':
+      return scanWordAscii(FalseString, JSONTokenKind::False);
+    case 'n':
+      return scanWordAscii(NullString, JSONTokenKind::Null);
+    case '-':
+    case '0':
+    case '1':
+    case '2':
+    case '3':
+    case '4':
+    case '5':
+    case '6':
+    case '7':
+    case '8':
+    case '9':
+      return scanNumberAscii();
+    case '"':
+      return forKey ? scanStringAscii<StrAsSymbol>()
+                    : scanStringAscii<StrAsValue>();
+    default:
+      return errorWithChar(
+          u"Unexpected character: ", (char16_t)(unsigned char)*acur_);
+  }
+}
+
+CallResult<char16_t> JSONLexer::consumeUnicodeAscii() {
+  uint16_t val = 0;
+  for (unsigned i = 0; i < 4; ++i) {
+    if (acur_ == aend_)
+      return error("Unexpected end of input");
+    int ch = *acur_ | 32;
+    if (ch >= '0' && ch <= '9') {
+      ch -= '0';
+    } else if (ch >= 'a' && ch <= 'f') {
+      ch -= 'a' - 10;
+    } else {
+      return errorWithChar(
+          u"Invalid unicode point character: ",
+          (char16_t)(unsigned char)*acur_);
+    }
+    val = (val << 4) + ch;
+    ++acur_;
+  }
+  return static_cast<char16_t>(val);
+}
+
+ExecutionStatus JSONLexer::scanNumberAscii() {
+  const char *start = acur_;
+  while (acur_ != aend_) {
+    char ch = *acur_;
+    if (!(ch == '-' || ch == '+' || ch == '.' || (ch | 32) == 'e' ||
+          (ch >= '0' && ch <= '9')))
+      break;
+    ++acur_;
+  }
+  size_t len = acur_ - start;
+  assert(len > 0 && "scanNumber must be called on a number-looking char");
+  if (start[0] == '0' && len > 1 && start[1] >= '0' && start[1] <= '9')
+    return errorWithChar(u"Unexpected character in number: ", start[1]);
+  // Fast path: plain non-negative/negative integers of up to 15 digits are
+  // exact as doubles; skip strtod.
+  {
+    const char *p = start;
+    bool neg = *p == '-';
+    if (neg)
+      ++p;
+    size_t ndig = acur_ - p;
+    if (ndig > 0 && ndig <= 15) {
+      uint64_t v = 0;
+      const char *q = p;
+      for (; q != acur_ && *q >= '0' && *q <= '9'; ++q)
+        v = v * 10 + (*q - '0');
+      if (q == acur_) {
+        double d = (double)v;
+        token_.setNumber(neg ? -d : d);
+        return ExecutionStatus::RETURNED;
+      }
+    }
+  }
+  llvh::SmallVector<char, 32> str8(start, acur_);
+  str8.push_back('\0');
+  char *endPtr;
+  double value = ::hermes_g_strtod(str8.data(), &endPtr);
+  if (endPtr != str8.data() + len)
+    return errorWithChar(u"Unexpected character in number: ", *endPtr);
+  token_.setNumber(value);
+  return ExecutionStatus::RETURNED;
+}
+
+template <typename ForKey>
+ExecutionStatus JSONLexer::scanStringAscii() {
+  assert(*acur_ == '"');
+  ++acur_;
+  const char *start = acur_;
+  hermes::JenkinsHash hash = hermes::JenkinsHashInit;
+  // Common case: no escapes -> the string is a slice of the input.
+  while (acur_ != aend_) {
+    char c = *acur_;
+    if (c == '"') {
+      llvh::ArrayRef<char> ref(start, acur_);
+      ++acur_;
+      if constexpr (ForKey::value) {
+        auto symRes =
+            runtime_.getIdentifierTable().getSymbolHandle(runtime_, ref, hash);
+        if (symRes == ExecutionStatus::EXCEPTION)
+          return ExecutionStatus::EXCEPTION;
+        token_.setSymbol(symRes->get());
+      } else {
+        auto strRes = StringPrimitive::create(runtime_, ref);
+        if (LLVM_UNLIKELY(strRes == ExecutionStatus::EXCEPTION))
+          return ExecutionStatus::EXCEPTION;
+        token_.setString(vmcast<StringPrimitive>(*strRes));
+      }
+      return ExecutionStatus::RETURNED;
+    }
+    if ((unsigned char)c <= 0x1F)
+      return error(u"U+0000 thru U+001F is not allowed in string");
+    if (c == '\\')
+      break;
+    if constexpr (ForKey::value)
+      hash = hermes::updateJenkinsHash(hash, (char16_t)c);
+    ++acur_;
+  }
+  if (acur_ == aend_)
+    return error("Unexpected end of input");
+
+  // Escapes present: build UTF-16 (\u escapes may produce non-ASCII).
+  SmallU16String<32> tmp;
+  for (const char *p = start; p != acur_; ++p)
+    tmp.push_back((unsigned char)*p);
+  bool allAscii = true;
+  while (acur_ != aend_) {
+    char c = *acur_;
+    if (c == '"') {
+      ++acur_;
+      if constexpr (ForKey::value) {
+        auto symRes = runtime_.getIdentifierTable().getSymbolHandle(
+            runtime_, tmp.arrayRef(), hash);
+        if (symRes == ExecutionStatus::EXCEPTION)
+          return ExecutionStatus::EXCEPTION;
+        token_.setSymbol(symRes->get());
+      } else {
+        auto strRes = StringPrimitive::createWithKnownEncoding(
+            runtime_, tmp.arrayRef(), allAscii);
+        if (LLVM_UNLIKELY(strRes == ExecutionStatus::EXCEPTION))
+          return ExecutionStatus::EXCEPTION;
+        token_.setString(vmcast<StringPrimitive>(*strRes));
+      }
+      return ExecutionStatus::RETURNED;
+    }
+    if ((unsigned char)c <= 0x1F)
+      return error(u"U+0000 thru U+001F is not allowed in string");
+    char16_t scanned;
+    if (c == '\\') {
+      ++acur_;
+      if (acur_ == aend_)
+        return error("Unexpected end of input");
+      switch (*acur_) {
+        case '"':
+        case '/':
+        case '\\':
+          scanned = *acur_;
+          ++acur_;
+          break;
+        case 'b':
+          scanned = 8;
+          ++acur_;
+          break;
+        case 'f':
+          scanned = 12;
+          ++acur_;
+          break;
+        case 'n':
+          scanned = 10;
+          ++acur_;
+          break;
+        case 'r':
+          scanned = 13;
+          ++acur_;
+          break;
+        case 't':
+          scanned = 9;
+          ++acur_;
+          break;
+        case 'u': {
+          ++acur_;
+          CallResult<char16_t> cr = consumeUnicodeAscii();
+          if (LLVM_UNLIKELY(cr == ExecutionStatus::EXCEPTION))
+            return ExecutionStatus::EXCEPTION;
+          scanned = *cr;
+          break;
+        }
+        default:
+          return errorWithChar(
+              u"Invalid escape sequence: ", (char16_t)(unsigned char)*acur_);
+      }
+    } else {
+      scanned = (unsigned char)c;
+      ++acur_;
+    }
+    tmp.push_back(scanned);
+    if constexpr (ForKey::value)
+      hash = hermes::updateJenkinsHash(hash, scanned);
+    else
+      allAscii &= isASCII(scanned);
+  }
+  return error("Unexpected end of input");
+}
+
+ExecutionStatus JSONLexer::scanWordAscii(const char *word, JSONTokenKind kind) {
+  while (*word && acur_ != aend_) {
+    if (*acur_ != *word)
+      return errorWithChar(
+          u"Unexpected character: ", (char16_t)(unsigned char)*acur_);
+    ++acur_;
+    ++word;
+  }
+  if (*word)
+    return error(u"Unexpected end of input");
   token_.setPunctuator(kind);
   return ExecutionStatus::RETURNED;
 }

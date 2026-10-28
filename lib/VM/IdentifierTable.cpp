@@ -95,15 +95,27 @@ CallResult<Handle<SymbolID>> IdentifierTable::getSymbolHandleFromPrimitive(
     SymbolID id = str->getUniqueID(runtime);
     return runtime.makeHandle(id);
   }
-  auto handle = runtime.makeHandle(std::move(str));
+  StrSymCacheEntry *cacheEntry = &strSymCache_[strSymCacheIndex(str.get())];
+  if (cacheEntry->str == str.get()) {
+    runtime.getHeap().weakRefReadBarrier(cacheEntry->sym);
+    return runtime.makeHandle(cacheEntry->sym);
+  }
+  auto origHandle = runtime.makeHandle(std::move(str));
   // Force the string primitive to flatten if it's a rope.
-  handle = StringPrimitive::ensureFlat(runtime, handle);
+  auto handle = StringPrimitive::ensureFlat(runtime, origHandle);
   uint32_t hash = handle->getOrComputeHash();
   auto cr = handle->isASCII()
       ? getOrCreateIdentifier(runtime, handle->castToASCIIRef(), handle, hash)
       : getOrCreateIdentifier(runtime, handle->castToUTF16Ref(), handle, hash);
   if (LLVM_UNLIKELY(cr == ExecutionStatus::EXCEPTION))
     return ExecutionStatus::EXCEPTION;
+  if (!origHandle->isUniqued()) {
+    // Re-read the address through the handle: the calls above may have
+    // allocated and run a GC (which clears the cache and may move strings).
+    cacheEntry = &strSymCache_[strSymCacheIndex(origHandle.get())];
+    cacheEntry->str = origHandle.get();
+    cacheEntry->sym = *cr;
+  }
   return runtime.makeHandle(*cr);
 }
 
@@ -490,6 +502,7 @@ void IdentifierTable::freeID(uint32_t id) {
 void IdentifierTable::freeUnmarkedSymbols(
     llvh::BitVector &markedSymbols,
     GC::IDTracker &tracker) {
+  clearStrSymCache();
   assert(
       markedSymbols.size() <= lookupVector_.size() &&
       "Size of markedSymbols must be less than the current lookupVector");

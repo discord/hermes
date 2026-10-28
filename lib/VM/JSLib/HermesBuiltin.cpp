@@ -354,6 +354,16 @@ CallResult<HermesValue> hermesBuiltinCopyDataProperties(
       (!excludedItems || !excludedItems->isProxyObject()) &&
       "excludedItems internal List is a Proxy");
 
+  // Spreading into a fresh {}: share the source's hidden class.
+  if (!excludedItems) {
+    auto cloned =
+        JSObject::tryCloneDataPropertiesForSpread(target, source, runtime);
+    if (LLVM_UNLIKELY(cloned == ExecutionStatus::EXCEPTION))
+      return ExecutionStatus::EXCEPTION;
+    if (*cloned)
+      return target.getHermesValue();
+  }
+
   // We cannot use the fast path if the object is a proxy, host object, or when
   // there could potentially be an accessor defined on the object. This is
   // because in order to use JSObject::forEachOwnPropertyWhile, we must not

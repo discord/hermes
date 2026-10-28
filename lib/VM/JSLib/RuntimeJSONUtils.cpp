@@ -68,6 +68,14 @@ class RuntimeJSONParser {
         lexer_(runtime, std::move(jsonString)),
         reviver_(reviver) {}
 
+  /// Parse 7-bit ASCII text in [begin, end), which must not move.
+  explicit RuntimeJSONParser(
+      Runtime &runtime,
+      const char *begin,
+      const char *end,
+      Handle<Callable> reviver)
+      : runtime_(runtime), lexer_(runtime, begin, end), reviver_(reviver) {}
+
   /// Parse JSON string through lexer_, create objects using runtime_.
   /// If errors occur, this function will return undefined, and the error
   /// should be kept inside SourceErrorManager.
@@ -338,7 +346,6 @@ CallResult<HermesValue> RuntimeJSONParser::parseValue() {
 CallResult<HermesValue> RuntimeJSONParser::parseArray() {
   struct : public Locals {
     PinnedValue<JSArray> array;
-    PinnedValue<> indexValue;
     PinnedValue<> elementValue;
   } lv;
   LocalsRAII lraii(runtime_, &lv);
@@ -355,6 +362,7 @@ CallResult<HermesValue> RuntimeJSONParser::parseArray() {
   if (LLVM_UNLIKELY(lexer_.advance() == ExecutionStatus::EXCEPTION)) {
     return ExecutionStatus::EXCEPTION;
   }
+  uint32_t arrayLength = 0;
   if (lexer_.getCurToken()->getKind() != JSONTokenKind::RSquare) {
     GCScope gcScope{runtime_};
     auto marker = gcScope.createMarker();
@@ -367,14 +375,13 @@ CallResult<HermesValue> RuntimeJSONParser::parseArray() {
         return ExecutionStatus::EXCEPTION;
       }
 
-      lv.indexValue = HermesValue::encodeTrustedNumberValue(index);
+      // Append directly; .length is set once after the loop.
       lv.elementValue = *parRes;
-      (void)JSObject::defineOwnComputedPrimitive(
-          lv.array,
-          runtime_,
-          lv.indexValue,
-          DefinePropertyFlags::getDefaultNewPropertyFlags(),
-          lv.elementValue);
+      if (LLVM_UNLIKELY(
+              JSArray::setElementAt(lv.array, runtime_, index, lv.elementValue) ==
+              ExecutionStatus::EXCEPTION))
+        return ExecutionStatus::EXCEPTION;
+      arrayLength = index + 1;
 
       if (lexer_.getCurToken()->getKind() == JSONTokenKind::Comma) {
         if (LLVM_UNLIKELY(lexer_.advance() == ExecutionStatus::EXCEPTION)) {
@@ -391,6 +398,11 @@ CallResult<HermesValue> RuntimeJSONParser::parseArray() {
         lexer_.getCurToken()->getKind() == JSONTokenKind::RSquare &&
         "Unexpected break for array parse");
   }
+  if (arrayLength &&
+      LLVM_UNLIKELY(
+          JSArray::setLengthProperty(lv.array, runtime_, arrayLength) ==
+          ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
 
   return lv.array.getHermesValue();
 }
@@ -448,12 +460,33 @@ CallResult<HermesValue> RuntimeJSONParser::parseObject() {
     }
 
     lv.propertyValue = *parRes;
-    (void)JSObject::defineOwnComputedPrimitive(
-        lv.object,
+    // Objects of the same shape (arrays of records) keep hitting the same
+    // HiddenClass transitions; an existing transition for this key also proves
+    // the key isn't present yet, so no duplicate-key handling is needed.
+    // Encoding can allocate (boxed doubles), so it must happen before taking
+    // the raw class and object pointers below.
+    SmallHermesValue shv =
+        SmallHermesValue::encodeHermesValue(*lv.propertyValue, runtime_);
+    HiddenClass *next = HiddenClass::findExistingAddTransition(
+        lv.object->getClass(runtime_),
         runtime_,
-        lv.key,
-        DefinePropertyFlags::getDefaultNewPropertyFlags(),
-        lv.propertyValue);
+        *lv.key,
+        PropertyFlags::defaultNewNamedPropertyFlags());
+    if (next && !next->getHasIndexLikeProperties()) {
+      JSObject::addNewOwnPropertyInSlot(
+          *lv.object,
+          runtime_,
+          next,
+          lv.object->getClass(runtime_)->getNumProperties(),
+          shv);
+    } else {
+      (void)JSObject::defineOwnComputedPrimitive(
+          lv.object,
+          runtime_,
+          lv.key,
+          DefinePropertyFlags::getDefaultNewPropertyFlags(),
+          lv.propertyValue);
+    }
 
     if (lexer_.getCurToken()->getKind() == JSONTokenKind::Comma) {
       if (LLVM_UNLIKELY(
@@ -615,6 +648,25 @@ CallResult<HermesValue> runtimeJSONParse(
   // in most cases we'll need to copy, except for external 16-bit strings.
   UTF16Ref ref;
   SmallU16String<32> storage;
+  if (jsonString->isASCII()) {
+    // Lex ASCII input directly. External strings don't move; anything else is
+    // copied (1 byte/char instead of widening to 2) because parsing allocates
+    // and a GC may move the string.
+    auto view = StringPrimitive::createStringView(runtime, jsonString);
+    if (jsonString->isExternal()) {
+      RuntimeJSONParser parser{
+          runtime,
+          view.castToCharPtr(),
+          view.castToCharPtr() + view.length(),
+          reviver};
+      return parser.parse();
+    }
+    llvh::SmallVector<char, 256> copy(
+        view.castToCharPtr(), view.castToCharPtr() + view.length());
+    RuntimeJSONParser parser{
+        runtime, copy.data(), copy.data() + copy.size(), reviver};
+    return parser.parse();
+  }
   if (LLVM_UNLIKELY(jsonString->isExternal() && !jsonString->isASCII())) {
     ref = jsonString->getStringRef<char16_t>();
   } else {
