@@ -55,6 +55,11 @@ struct ClassFlags {
   /// property is set and then deleted, this will still be set to true.
   uint8_t mayHaveAccessor : 1;
 
+  /// Number of times this dictionary has been re-classed into a new
+  /// *cacheable* dictionary on property delete/update (see
+  /// HiddenClass::kDictReclassLimit).
+  uint8_t dictReclassCount : 4;
+
   ClassFlags() {
     ::memset(this, 0, sizeof(*this));
   }
@@ -399,6 +404,19 @@ class HiddenClass final : public GCCell {
   /// false. If there was no allocated property map, this returns llvh::None. If
   /// this fails by returning None, the "slow path", \c findProperty() itself,
   /// must be used.
+  /// \return the existing child of \p self for adding property \p name with
+  /// \p flags, or nullptr. A non-null result implies \p self does not have
+  /// \p name. Does not allocate.
+  static HiddenClass *findExistingAddTransition(
+      HiddenClass *self,
+      Runtime &runtime,
+      SymbolID name,
+      PropertyFlags flags) {
+    if (self->isDictionary())
+      return nullptr;
+    return self->transitionMap_.lookup(runtime, {name, flags});
+  }
+
   static OptValue<bool> tryFindPropertyFast(
       const HiddenClass *self,
       PointerBase &base,
@@ -518,6 +536,23 @@ class HiddenClass final : public GCCell {
   /// will have one.  The \p noCache argument indicates whether the
   /// new dictionary \c HiddenClass's dictionaryNoCacheMode flag will
   /// be set.  \return the new class.
+  /// Deleting or updating a property of a cacheable dictionary must give the
+  /// object a new HiddenClass identity so property caches keyed by the old one
+  /// can't hit. Upstream allowed this once and then switched the dictionary to
+  /// no-cache mode forever, which makes every property-cache lookup on it miss
+  /// (notably the global object, whose lazy globals are redefined at startup).
+  /// Allow up to this many cacheable re-classings first.
+  static constexpr unsigned kDictReclassLimit = 15;
+  static_assert(
+      kDictReclassLimit < (1u << 4),
+      "kDictReclassLimit must fit in ClassFlags::dictReclassCount");
+
+  /// If \p self is a cacheable dictionary within kDictReclassLimit, return a
+  /// new cacheable dictionary class; otherwise a null handle.
+  static Handle<HiddenClass> tryReclassCacheableDictionary(
+      Handle<HiddenClass> self,
+      Runtime &runtime);
+
   static Handle<HiddenClass> copyToNewDictionary(
       Handle<HiddenClass> selfHandle,
       Runtime &runtime,

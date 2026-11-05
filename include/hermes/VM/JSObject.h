@@ -848,6 +848,18 @@ class JSObject : public GCCell {
   /// proxy is undefined, then false will be returned, otherwise, desc will be
   /// filled in with the result, and true will be returned.  If selfHandle is
   /// not a proxy, then the flag is irrelevant.
+  /// Fast path for object spread (`{...source}` into a fresh `{}`): if
+  /// \p target is an empty, extensible plain object and \p source is a plain
+  /// object whose own properties are all enumerable, writable, configurable,
+  /// string-keyed data properties (non-dictionary class, no accessors, no
+  /// index-like names) with the same prototype, make \p target share
+  /// \p source's hidden class and copy the slot values in bulk. Observably
+  /// identical to CopyDataProperties. \return true if done.
+  static CallResult<bool> tryCloneDataPropertiesForSpread(
+      Handle<JSObject> target,
+      Handle<JSObject> source,
+      Runtime &runtime);
+
   static CallResult<bool> getOwnComputedPrimitiveDescriptor(
       Handle<JSObject> selfHandle,
       Runtime &runtime,

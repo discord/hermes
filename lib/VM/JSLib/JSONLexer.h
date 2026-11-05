@@ -116,6 +116,12 @@ class JSONLexer {
  private:
   UTF16Stream curCharPtr_;
 
+  /// ASCII mode scans [acur_, aend_) directly (no UTF-16 widening).
+  /// The buffer must not move during parsing.
+  bool ascii_{false};
+  const char *acur_{nullptr};
+  const char *aend_{nullptr};
+
   Runtime &runtime_;
 
   JSONToken token_;
@@ -125,6 +131,15 @@ class JSONLexer {
  public:
   JSONLexer(Runtime &runtime, UTF16Stream &&stream)
       : curCharPtr_(std::move(stream)), runtime_(runtime), token_(runtime) {}
+
+  /// Lex 7-bit ASCII input in place.
+  JSONLexer(Runtime &runtime, const char *begin, const char *end)
+      : curCharPtr_(llvh::ArrayRef<char16_t>()),
+        ascii_(true),
+        acur_(begin),
+        aend_(end),
+        runtime_(runtime),
+        token_(runtime) {}
 
   /// \return the current token.
   const JSONToken *getCurToken() const {
@@ -187,6 +202,16 @@ class JSONLexer {
   /// Parse a unicode code point and \return the char16 value.
   /// On error, \return llvh::None.
   CallResult<char16_t> consumeUnicode();
+
+  // ASCII-mode counterparts.
+  LLVM_NODISCARD ExecutionStatus advanceHelperAscii(bool forKey);
+  LLVM_NODISCARD ExecutionStatus scanNumberAscii();
+  template <typename ForKey>
+  LLVM_NODISCARD ExecutionStatus scanStringAscii();
+  LLVM_NODISCARD ExecutionStatus scanWordAscii(
+      const char *word,
+      JSONTokenKind kind);
+  CallResult<char16_t> consumeUnicodeAscii();
 };
 
 } // namespace vm

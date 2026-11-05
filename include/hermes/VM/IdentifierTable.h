@@ -8,6 +8,7 @@
 #ifndef HERMES_VM_IDENTIFIERTABLE_H
 #define HERMES_VM_IDENTIFIERTABLE_H
 
+#include <cstring>
 #include "hermes/ADT/PtrOrInt.h"
 #include "hermes/ADT/TransparentConservativeVector.h"
 #include "hermes/Support/HashString.h"
@@ -180,6 +181,12 @@ class IdentifierTable {
     return lookupVector_.size();
   }
 
+  /// Forget all cached (non-uniqued StringPrimitive* -> SymbolID) mappings.
+  /// Must be called whenever objects may move or symbols may be freed.
+  void clearStrSymCache() {
+    memset(strSymCache_, 0, sizeof(strSymCache_));
+  }
+
   /// Invoked at the end of a GC to free all unmarked symbols. The function may
   /// set additional bits in \p markedSymbols to reflect the fact that some
   /// symbols were not freed.
@@ -212,6 +219,23 @@ class IdentifierTable {
       Handle<StringPrimitive> desc);
 
  private:
+  /// Small direct-mapped cache from non-uniqued string primitives (by address)
+  /// to their SymbolID, so repeated computed-property accesses with the same
+  /// key string (e.g. obj[id] with an id taken from JSON) skip hashing and the
+  /// identifier-table probe. Keyed by address, so it is only valid between
+  /// GCs: cleared by clearStrSymCache() at the start of every GC cycle and
+  /// when symbols are freed.
+  struct StrSymCacheEntry {
+    const StringPrimitive *str;
+    SymbolID sym;
+  };
+  static constexpr unsigned kStrSymCacheSize = 256;
+  StrSymCacheEntry strSymCache_[kStrSymCacheSize]{};
+  static unsigned strSymCacheIndex(const StringPrimitive *str) {
+    auto p = reinterpret_cast<uintptr_t>(str);
+    return ((p >> 3) ^ (p >> 11)) & (kStrSymCacheSize - 1);
+  }
+
   /// Entry in the lookup vector. An entry can represent 5 different types:
   /// 1. A lazy ASCII identifier: asciiPtr_ will be set to a pointer to
   ///   some static char * memory, num_ will be the string length,

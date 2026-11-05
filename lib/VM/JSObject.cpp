@@ -1986,6 +1986,63 @@ CallResult<bool> JSObject::deleteNamed(
   return true;
 }
 
+CallResult<bool> JSObject::tryCloneDataPropertiesForSpread(
+    Handle<JSObject> target,
+    Handle<JSObject> source,
+    Runtime &runtime) {
+  if (target->getKind() != CellKind::JSObjectKind ||
+      source->getKind() != CellKind::JSObjectKind)
+    return false;
+  if (target->flags_.noExtend || target->propStorage_ ||
+      target->flags_.isCachedUsingEpoch)
+    return false;
+  HiddenClass *tc = target->getClass(runtime);
+  HiddenClass *sc = source->getClass(runtime);
+  if (tc->getNumProperties() != 0 || tc == sc)
+    return false;
+  if (sc->isDictionary() || sc->getMayHaveAccessor() ||
+      sc->getHasIndexLikeProperties())
+    return false;
+  if (target->getParent(runtime) != source->getParent(runtime))
+    return false;
+  const unsigned numProps = sc->getNumProperties();
+  if (numProps == 0)
+    return true;
+
+  struct : public Locals {
+    PinnedValue<HiddenClass> clazz;
+  } lv;
+  LocalsRAII lraii(runtime, &lv);
+  lv.clazz = sc;
+
+  // Every property must be exactly what CreateDataProperty would produce.
+  const PropertyFlags defaultFlags =
+      PropertyFlags::defaultNewNamedPropertyFlags();
+  bool ok = HiddenClass::forEachPropertyWhile(
+      lv.clazz,
+      runtime,
+      [defaultFlags](Runtime &, SymbolID id, NamedPropertyDescriptor desc) {
+        return desc.flags == defaultFlags && id.isUniqued() &&
+            !InternalProperty::isInternal(id);
+      });
+  if (!ok)
+    return false;
+
+  if (LLVM_UNLIKELY(
+          allocatePropStorage(target, runtime, numProps) ==
+          ExecutionStatus::EXCEPTION))
+    return ExecutionStatus::EXCEPTION;
+
+  NoAllocScope noAlloc{runtime};
+  JSObject *t = *target;
+  JSObject *src = *source;
+  t->updateClass(runtime, *lv.clazz);
+  for (SlotIndex i = 0; i < numProps; ++i)
+    setNamedSlotValueUnsafe(
+        t, runtime, i, getNamedSlotValueUnsafe(src, runtime, i));
+  return true;
+}
+
 CallResult<bool> JSObject::deleteComputed(
     Handle<JSObject> selfHandle,
     Runtime &runtime,

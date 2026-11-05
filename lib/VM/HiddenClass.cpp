@@ -193,6 +193,18 @@ CallResult<HermesValue> HiddenClass::create(
   return HermesValue::encodeObjectValue(obj);
 }
 
+Handle<HiddenClass> HiddenClass::tryReclassCacheableDictionary(
+    Handle<HiddenClass> self,
+    Runtime &runtime) {
+  if (!self->isDictionary() || self->isDictionaryNoCache() ||
+      self->flags_.dictReclassCount >= kDictReclassLimit)
+    return Runtime::makeNullHandle<HiddenClass>();
+  unsigned count = self->flags_.dictReclassCount;
+  auto newHandle = copyToNewDictionary(self, runtime, /*noCache*/ false);
+  newHandle->flags_.dictReclassCount = count + 1;
+  return newHandle;
+}
+
 Handle<HiddenClass> HiddenClass::copyToNewDictionary(
     Handle<HiddenClass> selfHandle,
     Runtime &runtime,
@@ -344,10 +356,15 @@ Handle<HiddenClass> HiddenClass::deleteProperty(
     PropertyPos pos) {
   // We convert to dictionary if we're not yet a dictionary
   // (transition to a cacheable dictionary), or if we are, but not yet
-  // in no-cache mode (transition to no-cache mode).
-  auto newHandle = LLVM_UNLIKELY(!selfHandle->isDictionaryNoCache())
-      ? copyToNewDictionary(selfHandle, runtime, selfHandle->isDictionary())
-      : selfHandle;
+  // in no-cache mode (a new cacheable dictionary while within the re-class
+  // budget, otherwise transition to no-cache mode).
+  Handle<HiddenClass> newHandle = selfHandle;
+  if (LLVM_UNLIKELY(!selfHandle->isDictionaryNoCache())) {
+    newHandle = tryReclassCacheableDictionary(selfHandle, runtime);
+    if (!newHandle.get())
+      newHandle = copyToNewDictionary(
+          selfHandle, runtime, selfHandle->isDictionary());
+  }
 
   --newHandle->numProperties_;
 
@@ -514,9 +531,13 @@ Handle<HiddenClass> HiddenClass::updateProperty(
     DictPropertyMap::getDescriptorPair(
         selfHandle->propertyMap_.getNonNull(runtime), pos)
         ->second.flags = newFlags;
-    // If it's still cacheable, make it non-cacheable.
+    // If it's still cacheable, give it a new cacheable class while within the
+    // re-class budget, otherwise make it non-cacheable.
     if (!selfHandle->isDictionaryNoCache()) {
-      selfHandle = copyToNewDictionary(selfHandle, runtime, /*noCache*/ true);
+      auto reclassed = tryReclassCacheableDictionary(selfHandle, runtime);
+      selfHandle = reclassed.get()
+          ? reclassed
+          : copyToNewDictionary(selfHandle, runtime, /*noCache*/ true);
     }
     return selfHandle;
   }

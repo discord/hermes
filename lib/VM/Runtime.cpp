@@ -2214,6 +2214,9 @@ std::string Runtime::getCallStackNoAlloc(const Inst *ip) {
 }
 
 void Runtime::onGCEvent(GCEventKind kind, const std::string &extraInfo) {
+  // The string->symbol cache is keyed by address; objects may move.
+  if (kind == GCEventKind::CollectionStart)
+    identifierTable_.clearStrSymCache();
 #if HERMESVM_SAMPLING_PROFILER_AVAILABLE
   if (samplingProfiler) {
     switch (kind) {
